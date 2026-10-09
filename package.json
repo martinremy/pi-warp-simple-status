@@ -1,0 +1,25 @@
+{
+  "name": "pi-warp-simple-status",
+  "version": "0.1.0",
+  "description": "Foreground-only busy and done status for Pi in Warp",
+  "keywords": ["pi", "pi-coding-agent", "pi-package", "warp"],
+  "homepage": "https://github.com/martinremy/pi-warp-simple-status#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/martinremy/pi-warp-simple-status.git"
+  },
+  "license": "MIT",
+  "author": "Martin Remy",
+  "type": "module",
+  "files": ["src/", "README.md", "LICENSE"],
+  "engines": {"node": ">=22.0.0"},
+  "peerDependencies": {"@earendil-works/pi-coding-agent": ">=1.1.0"},
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@types/node": "22.20.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  },
+  "scripts": {"test": "vitest run", "check": "tsc --noEmit"},
+  "pi": {"extensions": ["./src/index.ts"], "ambientObserver": true}
+}
