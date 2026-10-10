@@ -30,6 +30,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
   vi.stubEnv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1");
+  vi.stubEnv("PI_WARP_SIMPLE_STATUS_TRACE", undefined);
   vi.mocked(fs.openSync).mockReturnValue(42);
   vi.mocked(fs.writeSync).mockReturnValue(1);
 });
@@ -62,7 +63,7 @@ describe("optional manager-wide completion", () => {
     jobs[1].status = "stopped"; // queued cancellation: no lifecycle event
     await vi.advanceTimersByTimeAsync(249);
     expect(events()).not.toContain("stop");
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(501);
     expect(events()).toEqual(["session_start", "prompt_submit", "prompt_submit", "stop"]);
     expect(records().every((r) => r.session_id === "foreground")).toBe(true);
     await h.fire("agent_settled", ctx); await vi.advanceTimersByTimeAsync(30000);
@@ -76,7 +77,7 @@ describe("optional manager-wide completion", () => {
     await h.fire("session_start", ctx); await h.fire("agent_start", ctx); await h.fire("agent_settled", ctx);
     expect(events()).not.toContain("stop");
     manager.running = false;
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
   it("discovers a manager registered after this extension loads", async () => {
@@ -87,7 +88,7 @@ describe("optional manager-wide completion", () => {
     await h.fire("agent_settled", ctx);
     expect(events()).not.toContain("stop");
     manager.hasRunning = () => false;
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
   it("keeps waiting if duplicate settlement arrives during managed work", async () => {
@@ -99,7 +100,7 @@ describe("optional manager-wide completion", () => {
     expect(vi.getTimerCount()).toBe(2);
     expect(events()).not.toContain("stop");
     running = false;
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
   it("does not complete when jobs finish during a new foreground response", async () => {
@@ -113,6 +114,7 @@ describe("optional manager-wide completion", () => {
     expect(events()).toEqual(["session_start", "prompt_submit", "prompt_submit"]);
     expect(vi.getTimerCount()).toBe(1);
     await h.fire("agent_settled", ctx);
+    await vi.advanceTimersByTimeAsync(500);
     expect(events()).toEqual(["session_start", "prompt_submit", "prompt_submit", "stop"]);
   });
   it.each(["session_start", "session_shutdown"])("cancels managed polling and heartbeat on %s", async (name) => {
@@ -137,7 +139,7 @@ describe("optional manager-wide completion", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(events()).toEqual(["session_start", "prompt_submit"]);
     running = false;
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
   it("contains status-call exceptions, stays busy, and retries", async () => {
@@ -149,7 +151,7 @@ describe("optional manager-wide completion", () => {
     await vi.advanceTimersByTimeAsync(15000);
     expect(events()).toEqual(["session_start", "prompt_submit", "prompt_submit"]);
     manager.hasRunning = () => false;
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "prompt_submit", "stop"]);
   });
   it("contains registry-access errors until the registry recovers", async () => {
@@ -159,7 +161,7 @@ describe("optional manager-wide completion", () => {
     await expect(h.fire("agent_settled", ctx)).resolves.toBeUndefined();
     expect(events()).not.toContain("stop");
     setManager({ hasRunning: () => false });
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
   it("contains a throwing method getter until it recovers", async () => {
@@ -170,7 +172,7 @@ describe("optional manager-wide completion", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(events()).not.toContain("stop");
     setManager({ hasRunning: () => false });
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
   it.each([undefined, null, 0, "false"])("requires definitive false after unexpected status %j", async (result) => {
@@ -180,7 +182,7 @@ describe("optional manager-wide completion", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(events()).not.toContain("stop");
     setManager({ hasRunning: () => false });
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
   it("falls back safely if the manager is removed while waiting", async () => {
@@ -189,7 +191,7 @@ describe("optional manager-wide completion", () => {
     await h.fire("session_start", ctx); await h.fire("agent_start", ctx); await h.fire("agent_settled", ctx);
     expect(events()).not.toContain("stop");
     Reflect.deleteProperty(globalThis, managerKey);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(750);
     expect(events()).toEqual(["session_start", "prompt_submit", "stop"]);
   });
 });

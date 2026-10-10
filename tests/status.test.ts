@@ -29,6 +29,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
   vi.stubEnv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1");
+  vi.stubEnv("PI_WARP_SIMPLE_STATUS_TRACE", undefined);
   vi.mocked(fs.openSync).mockReturnValue(42);
   vi.mocked(fs.writeSync).mockReturnValue(1);
 });

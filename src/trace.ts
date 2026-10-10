@@ -8,6 +8,8 @@ interface TraceState {
   foregroundActive: boolean;
   heartbeatActive: boolean;
   workCheckActive: boolean;
+  completionPending: boolean;
+  hadManagedWork: boolean;
 }
 interface TraceDetails {
   sessionId?: string;
@@ -21,7 +23,7 @@ interface TraceDetails {
 export function createTrace(state: () => TraceState) {
   let instanceId: string | undefined;
   return (
-    kind: "registration" | "lifecycle" | "manager" | "emit",
+    kind: "registration" | "lifecycle" | "manager" | "completion" | "emit",
     event: string,
     details: () => TraceDetails = () => ({}),
   ): void => {

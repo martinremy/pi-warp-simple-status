@@ -5,6 +5,8 @@ import { createTrace } from "./trace.js";
 
 const HEARTBEAT_MS = 15_000;
 const WORK_CHECK_MS = 250;
+const COMPLETION_GRACE_MS = 500;
+type CompletionReason = "agent_settled" | "manager_poll" | "completion_grace";
 
 export default function register(pi: ExtensionAPI): void {
   // Each runtime owns its own identity and timer. In-process SDK children may
@@ -15,6 +17,8 @@ export default function register(pi: ExtensionAPI): void {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let workCheck: ReturnType<typeof setInterval> | undefined;
   let lastManagedWork: boolean | undefined;
+  let hadManagedWork = false;
+  let completionTimer: ReturnType<typeof setTimeout> | undefined;
 
   const trace = createTrace(() => ({
     ownerSessionId: session?.id ?? null,
@@ -22,6 +26,8 @@ export default function register(pi: ExtensionAPI): void {
     foregroundActive,
     heartbeatActive: heartbeat !== undefined,
     workCheckActive: workCheck !== undefined,
+    completionPending: completionTimer !== undefined,
+    hadManagedWork,
   }));
   const warpSupported = supportsWarp();
   trace("registration", "detect_warp", () => ({ warpSupported }));
@@ -46,7 +52,20 @@ export default function register(pi: ExtensionAPI): void {
     workCheck = undefined;
   }
 
-  function finishWhenIdle(active: WarpSession, reason: "agent_settled" | "manager_poll"): void {
+  function cancelCompletion(reason: string): void {
+    if (completionTimer === undefined) return;
+    clearTimeout(completionTimer);
+    completionTimer = undefined;
+    trace("completion", "cancelled", () => ({ sessionId: session?.id, reason }));
+  }
+
+  function startWorkCheck(active: WarpSession): void {
+    if (workCheck !== undefined) return;
+    workCheck = setInterval(() => finishWhenIdle(active, "manager_poll"), WORK_CHECK_MS);
+    workCheck.unref();
+  }
+
+  function finishWhenIdle(active: WarpSession, reason: CompletionReason): void {
     if (!busy || foregroundActive || session !== active) return;
     const managedWorkBlocking = hasManagedWork();
     if (lastManagedWork !== managedWorkBlocking) {
@@ -54,10 +73,24 @@ export default function register(pi: ExtensionAPI): void {
       trace("manager", "work_status", () => ({ sessionId: active.id, managedWorkBlocking }));
     }
     if (managedWorkBlocking) {
-      if (workCheck === undefined) {
-        workCheck = setInterval(() => finishWhenIdle(active, "manager_poll"), WORK_CHECK_MS);
-        workCheck.unref();
+      hadManagedWork = true;
+      cancelCompletion("managed_work");
+      startWorkCheck(active);
+      return;
+    }
+    // Only a busy period that actually waited for managed work needs grace.
+    // Keep polling/heartbeating, but do not reset an existing completion timer.
+    if (hadManagedWork && reason !== "completion_grace") {
+      if (completionTimer === undefined) {
+        completionTimer = setTimeout(() => {
+          completionTimer = undefined;
+          trace("completion", "elapsed", () => ({ sessionId: active.id }));
+          finishWhenIdle(active, "completion_grace");
+        }, COMPLETION_GRACE_MS);
+        completionTimer.unref();
+        trace("completion", "scheduled", () => ({ sessionId: active.id, reason }));
       }
+      startWorkCheck(active);
       return;
     }
     busy = false;
@@ -78,9 +111,11 @@ export default function register(pi: ExtensionAPI): void {
     if (session?.id === id && session.cwd === ctx.cwd) return;
     stopHeartbeat();
     stopWorkCheck();
+    cancelCompletion("session_start");
     busy = false;
     foregroundActive = false;
     lastManagedWork = undefined;
+    hadManagedWork = false;
     session = { id, cwd: ctx.cwd };
     emit("session_start", session, "session_start");
   });
@@ -89,11 +124,13 @@ export default function register(pi: ExtensionAPI): void {
     traceLifecycle("agent_start", ctx);
     if (!owns(ctx)) return;
     foregroundActive = true;
+    cancelCompletion("agent_start");
     stopWorkCheck();
     if (busy) return;
     const active = session!;
     busy = true;
     lastManagedWork = undefined;
+    hadManagedWork = false;
     emit("prompt_submit", active, "agent_start");
     heartbeat = setInterval(() => {
       if (busy && session === active) emit("prompt_submit", active, "heartbeat");
@@ -117,7 +154,9 @@ export default function register(pi: ExtensionAPI): void {
     foregroundActive = false;
     stopHeartbeat();
     stopWorkCheck();
+    cancelCompletion("session_shutdown");
     lastManagedWork = undefined;
+    hadManagedWork = false;
     session = undefined;
   });
 }

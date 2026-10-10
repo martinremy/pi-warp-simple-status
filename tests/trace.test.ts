@@ -54,28 +54,30 @@ afterEach(() => {
 });
 
 describe("opt-in diagnostic trace", () => {
-  it("writes real JSONL showing two stop reasons around a delayed completion follow-up", async () => {
+  it("writes real JSONL showing cancelled grace and one stop after a completion follow-up", async () => {
     const state = manager(true); const h = host(); const ctx = context();
     await h.fire("session_start", ctx);
     await h.fire("agent_start", ctx, { prompt: "PRIVATE EVENT", input: "PRIVATE INPUT" });
     await h.fire("agent_settled", ctx);
     await vi.advanceTimersByTimeAsync(15000);
     state.running = false;
-    await vi.advanceTimersByTimeAsync(250); // manager-clear stop
+    await vi.advanceTimersByTimeAsync(250); // manager clear starts grace
     await vi.advanceTimersByTimeAsync(200); // completion notification arrives later
     await h.fire("agent_start", ctx);
-    await h.fire("agent_settled", ctx); // follow-up-response stop
+    await h.fire("agent_settled", ctx);
+    await vi.advanceTimersByTimeAsync(500); // one stop after follow-up settles
     const raw = fs.readFileSync(path, "utf8");
     const records = traceRecords();
     const stops = records.filter((r) => r.kind === "emit" && r.event === "stop");
-    expect(stops.map((r) => r.reason)).toEqual(["manager_poll", "agent_settled"]);
+    expect(stops.map((r) => r.reason)).toEqual(["completion_grace"]);
+    expect(records).toContainEqual(expect.objectContaining({ kind: "completion", event: "cancelled", reason: "agent_start" }));
     expect(stops.every((r) => r.sessionId === "foreground" && r.ownerSessionId === "foreground" && r.pid === process.pid)).toBe(true);
     expect(new Set(records.map((r) => r.instanceId)).size).toBe(1);
     expect(records).toContainEqual(expect.objectContaining({ kind: "manager", event: "work_status", managedWorkBlocking: true }));
     expect(records).toContainEqual(expect.objectContaining({ kind: "manager", event: "work_status", managedWorkBlocking: false }));
     expect(records).toContainEqual(expect.objectContaining({ kind: "lifecycle", event: "agent_settled", mode: "tui" }));
     expect(records).toContainEqual(expect.objectContaining({ kind: "emit", event: "prompt_submit", reason: "heartbeat" }));
-    expect(bytes().filter((b) => b.includes('"event":"stop"'))).toHaveLength(2);
+    expect(bytes().filter((b) => b.includes('"event":"stop"'))).toHaveLength(1);
     expect(records.every((r) => !Number.isNaN(Date.parse(String(r.timestamp))))).toBe(true);
     expect(raw).not.toContain("PRIVATE");
     if (process.platform !== "win32") expect(fs.statSync(path).mode & 0o777).toBe(0o600);
@@ -101,7 +103,7 @@ describe("opt-in diagnostic trace", () => {
       expect(vi.getTimerCount()).toBe(2);
       await vi.advanceTimersByTimeAsync(15000);
       state.running = false;
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(750);
       await h.fire("session_shutdown", ctx);
       expect(vi.getTimerCount()).toBe(0);
     };
