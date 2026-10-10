@@ -56,4 +56,15 @@
 - [ ] Commit final documentation/review changes. Push main and verify GitHub remote SHA matches local HEAD; report repository URL, checkout path, checks and install steps. Do not change user settings or claim busy/done rendering verified without user observation.
 
 ## Execution handoff
-Native execution is recommended because there are only two tightly coupled code units and a documentation/verification task. Wait for the user's plan approval and execution-method choice before repo creation or implementation.
+The user approved this plan and native execution. Implemented in the fresh requested checkout on main; the checkpoints above are the original approved task list.
+
+## Execution record
+- Repo created and cloned at the requested path; pi-recap license and gitignore copied unchanged.
+- Transport/lifecycle tests were observed failing before implementation, then passing.
+- Independent final review identified a Windows asynchronous stdout failure path. Replaced it with synchronous TTY-fd writes; two transport checks failed before the correction and passed afterward.
+- Final full suite: 40 passing tests in 2 files. TypeScript check passed.
+- Pi 1.1.0 loader smoke passed: four lifecycle handlers, no tools or commands.
+- npm pack dry-run passed: package manifest, README, LICENSE, and two source files only.
+- No correctness blockers remain from review. Visual Warp badge/toast behavior, heartbeat expiry, and coexistence with Pi's built-in terminal status remain live-verification boundaries, not automated success claims.
+- Ruling: use the fresh main checkout rather than a linked worktree, per the approved initial-repo plan. Existing repositories and user Pi settings were left unchanged.
+- Initial publication is an authorized push to main; no npm release or automatic installation.
