@@ -1,6 +1,6 @@
 # pi-warp-simple-status
 
-Foreground-only busy and done status for [Pi](https://pi.dev) in [Warp](https://www.warp.dev). Warp sees the session as busy while the foreground assistant is working, then receives a completion event when that response has settled—including any automatic retries, compaction, or continuation.
+Busy and done status for [Pi](https://pi.dev) in [Warp](https://www.warp.dev), with optional subagent-aware completion. Warp stays busy while the foreground assistant is working and, when `@tintinweb/pi-subagents` is available, while its manager still has running or queued work. Done is sent only after the foreground response has settled and that managed work has cleared.
 
 A deliberately smaller alternative to `rpiv-warp`: no child-session notifications, question events, idle timer, or custom tab-title spinner.
 
@@ -37,15 +37,18 @@ Start Pi inside Warp and use it normally. No commands, arguments, or configurati
 | --- | --- |
 | Interactive session starts or switches | `session_start` — announce the session |
 | Foreground agent starts | `prompt_submit` — busy |
-| Foreground agent settles | `stop` — done |
+| Foreground agent settles, and managed work is clear | `stop` — done |
 
-A busy heartbeat repeats every 15 seconds during an active foreground run to keep Warp from treating a long-running task as idle. It stops on settlement or session shutdown. There is no delayed `idle_prompt` event.
+A busy heartbeat repeats every 15 seconds while waiting for either the foreground response or managed work to finish. After foreground settlement, managed status is checked every 250 ms; both timers stop on completion, session replacement, or shutdown. There is no delayed `idle_prompt` event.
 
 ## Behavior notes
 
-- **Done means the foreground assistant has finished responding.** Background subagents may still be running. Launching a background agent and finishing the foreground reply counts as done; the background agent's own completion does not send a status event.
+- **Done means the foreground response has settled and no running or queued work remains in the optional subagent manager.** Launching background agents no longer produces completion just because the foreground reply ends.
+- The `pi-subagents` check is **manager-wide**: nested agents, workflows, and work retained across a session switch can hold completion. It is not filtered to the current turn or session. This extension does not independently announce jobs started while it is idle; it checks managed work when a foreground run settles.
+- `@tintinweb/pi-subagents` is **optional** and is not imported or installed by this extension. If its registry or callable status method is absent, completion is foreground-only. The documented registry API was checked against version 0.20.0 and is looked up dynamically, avoiding extension load-order dependence.
+- Status-check exceptions are contained. An installed manager that throws or reports an unexpected result is treated as busy, and checks continue until it reports `false`. If the registry is removed, the extension returns to foreground-only behavior.
 - Only interactive terminal sessions (`ctx.mode === "tui"`) are eligible. Events must also match the session ID captured by that extension instance. RPC, JSON, print, and headless child sessions are ignored.
-- Uses `agent_settled`, not `agent_end`: the latter can precede retries, compaction, and automatic continuation. Each active run sends completion once.
+- Uses `agent_settled`, not `agent_end`: the latter can precede retries, compaction, and automatic continuation. If another foreground response starts while waiting for background work, completion also waits for that response to settle. Each continuous busy period sends completion once.
 - State and heartbeat timers are owned by each extension instance. A child instance cannot cancel the foreground instance's heartbeat.
 - Does not change Pi's own spinner or terminal title, register model tools, or call a model.
 - Sends project directory and session identity, but **no prompt, reply, question, or tool-input content**. Completion text is simply “Pi finished responding.”
@@ -55,7 +58,7 @@ A busy heartbeat repeats every 15 seconds during an active foreground run to kee
 
 ## Development
 
-The Pi entry point is [`src/index.ts`](src/index.ts); the stateless Warp transport lives in [`src/warp.ts`](src/warp.ts). Pi loads TypeScript directly via jiti—no runtime build step or third-party runtime dependency.
+The Pi entry point is [`src/index.ts`](src/index.ts); the stateless Warp transport lives in [`src/warp.ts`](src/warp.ts), and the optional manager adapter in [`src/subagents.ts`](src/subagents.ts). Pi loads TypeScript directly via jiti—no runtime build step or third-party runtime dependency.
 
 ```sh
 npm ci
@@ -63,6 +66,6 @@ npm test
 npm run check
 ```
 
-Tests inspect encoded terminal writes and exercise foreground/headless separation, heartbeat ownership, session changes, settlement, and transport failure cleanup. After editing, restart Pi or use `/reload` to pick up changes.
+Tests inspect encoded terminal writes and exercise foreground/headless separation, heartbeat ownership, session changes, settlement, optional/missing manager behavior, managed-job completion/cancellation, safe status-call failures, and transport failure cleanup. After editing, restart Pi or use `/reload` to pick up changes.
 
-For a live check, use only this integration and observe a normal foreground turn, a turn lasting more than 15 seconds, and a background-subagent launch. The foreground reply should mark done even if background work continues; individual child events should not change that status. Badge/toast observations are separate from automated wire tests.
+For a live check, use only this integration and observe a normal foreground turn, a turn lasting more than 15 seconds, and two background agents waiting for 45 seconds. With `pi-subagents` available, the foreground launch reply should not mark done while those agents remain running. Individual child sessions never write status; the foreground integration marks done once the manager is clear and the foreground is settled. Also check a session without `pi-subagents`, which should retain foreground-only busy/done behavior. Badge/toast observations are separate from automated wire tests.

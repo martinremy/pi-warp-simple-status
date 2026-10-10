@@ -1,4 +1,7 @@
-# pi-warp-simple-status — design
+# pi-warp-simple-status — initial 0.1.0 design
+
+Historical approved design. Completion semantics were subsequently broadened in
+[Optional manager-wide completion](2026-10-09-managed-completion.md).
 
 ## Outcome
 Create public GitHub repository `martinremy/pi-warp-simple-status` (matching pi-recap's visibility), clone it to `/Users/mremy/devhome/github/pi-warp-simple-status`, and implement a standalone Pi extension. Leave rpiv-mono and the user's installed extension/settings untouched.
