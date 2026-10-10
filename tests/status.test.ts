@@ -63,10 +63,29 @@ describe("foreground status", () => {
     await h.fire("agent_start", context()); await h.fire("agent_settled", context());
     expect(records()).toEqual([]);
   });
-  it("does not announce the same session twice", async () => {
+  it("stays silent on idle startup and announces only once when work starts", async () => {
     const h = host(); const ctx = context();
     await h.fire("session_start", ctx); await h.fire("session_start", ctx);
-    expect(events()).toEqual(["session_start"]);
+    await h.fire("agent_settled", ctx);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(records()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    await h.fire("agent_start", ctx); await h.fire("agent_settled", ctx);
+    await h.fire("session_start", ctx);
+    await h.fire("agent_start", ctx); await h.fire("agent_settled", ctx);
+    expect(events()).toEqual(["session_start", "prompt_submit", "stop", "prompt_submit", "stop"]);
+  });
+  it("stays silent across idle session replacement and announces only the session that starts work", async () => {
+    const h = host(); const oldCtx = context("old"); const nextCtx = context("next");
+    await h.fire("session_start", oldCtx);
+    await h.fire("session_shutdown", oldCtx);
+    await h.fire("session_start", nextCtx, { reason: "new" });
+    await h.fire("agent_start", oldCtx);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(records()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    await h.fire("agent_start", nextCtx);
+    expect(records().map((r) => [r.event, r.session_id])).toEqual([["session_start", "next"], ["prompt_submit", "next"]]);
   });
   it("keeps heartbeat alive across agent_end until settlement", async () => {
     const h = host(); const ctx = context();
@@ -130,9 +149,9 @@ describe("foreground status", () => {
     await h.fire("session_start", nextCtx, { reason });
     await h.fire("agent_settled", oldCtx); await h.fire("session_shutdown", oldCtx);
     await vi.advanceTimersByTimeAsync(30000);
-    expect(events()).toEqual(["session_start", "prompt_submit", "session_start"]);
+    expect(events()).toEqual(["session_start", "prompt_submit"]);
     await h.fire("agent_start", nextCtx); await vi.advanceTimersByTimeAsync(15000); await h.fire("agent_settled", nextCtx);
-    expect(records().slice(3).map((r) => [r.event, r.session_id])).toEqual([["prompt_submit", "next"], ["prompt_submit", "next"], ["stop", "next"]]);
+    expect(records().slice(2).map((r) => [r.event, r.session_id])).toEqual([["session_start", "next"], ["prompt_submit", "next"], ["prompt_submit", "next"], ["stop", "next"]]);
   });
   it("registers nothing outside supported Warp", () => {
     vi.stubEnv("TERM_PROGRAM", "OtherTerminal");

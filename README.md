@@ -35,14 +35,16 @@ Start Pi inside Warp and use it normally. No commands, arguments, or configurati
 
 | Pi lifecycle | Sent to Warp |
 | --- | --- |
-| Interactive session starts or switches | `session_start` — announce the session |
-| Foreground agent starts | `prompt_submit` — busy |
+| Interactive session starts or switches, before any work | Nothing — track the session internally |
+| First foreground agent run in that session starts | `session_start`, then `prompt_submit` — announce and mark busy |
+| Subsequent foreground agent runs start | `prompt_submit` — busy |
 | Foreground agent settles, and managed work is clear | `stop` — done |
 
 A busy heartbeat repeats every 15 seconds while waiting for either the foreground response or managed work to finish. After foreground settlement, managed status is checked every 250 ms. Once observed managed work drains, completion gets a cancellable **500 ms grace period** so its notification can start a foreground follow-up without an extra done/busy cycle. The heartbeat stays active during grace; completion, session replacement, and shutdown clear all timers. There is no delayed `idle_prompt` event.
 
 ## Behavior notes
 
+- **No Warp indicator is introduced before the first prompt.** Warp's `session_start` announcement is deferred until actual foreground work begins, because announcing an idle session produces a busy indicator. Startup and idle session switches emit no status, and do not send a fake completion to clear the badge. Switching sessions does not explicitly clear an indicator left by earlier work.
 - **Done means the foreground response has settled and no running or queued work remains in the optional subagent manager.** Launching background agents no longer produces completion just because the foreground reply ends.
 - The `pi-subagents` check is **manager-wide**: nested agents, workflows, and work retained across a session switch can hold completion. It is not filtered to the current turn or session. This extension does not independently announce jobs started while it is idle; it checks managed work when a foreground run settles.
 - `@tintinweb/pi-subagents` is **optional** and is not imported or installed by this extension. If its registry or callable status method is absent, completion is foreground-only. The documented registry API was checked against version 0.20.0 and is looked up dynamically, avoiding extension load-order dependence.
@@ -78,8 +80,9 @@ and timer state. No conversation content is logged.
   conservatively as busy; `false` includes an absent optional manager.
 - `kind: "emit"` records an attempted OSC 777 event. For `stop`, `reason` is
   `completion_grace` after managed-work grace, or `agent_settled` for immediate
-  foreground-only completion. Busy events distinguish `agent_start` from
-  `heartbeat`.
+  foreground-only completion. The deferred `session_start` announcement has
+  reason `agent_start`; it is emitted immediately before the first busy event
+  in that session. Busy events distinguish `agent_start` from `heartbeat`.
 - `kind: "completion"` records grace being `scheduled`, `cancelled`, or
   `elapsed`. `completionPending` and `hadManagedWork` appear in state snapshots.
 
@@ -103,6 +106,6 @@ npm test
 npm run check
 ```
 
-Tests inspect encoded terminal writes and exercise foreground/headless separation, heartbeat ownership, session changes, settlement, optional/missing manager behavior, managed-job completion/cancellation, completion grace and delayed follow-up deduplication, safe status-call failures, and transport failure cleanup. After editing, restart Pi or use `/reload` to pick up changes.
+Tests inspect encoded terminal writes and exercise silent idle startup and session replacement, first-run announcement ordering and deduplication, foreground/headless separation, heartbeat ownership, session changes, settlement, optional/missing manager behavior, managed-job completion/cancellation, completion grace and delayed follow-up deduplication, safe status-call failures, and transport failure cleanup. After editing, restart Pi or use `/reload` to pick up changes.
 
-For a live check, use only this integration and observe a normal foreground turn, a turn lasting more than 15 seconds, and two background agents waiting for 45 seconds. With `pi-subagents` available, the foreground launch reply should not mark done while those agents remain running. Individual child sessions never write status; the foreground integration marks done once the manager is clear and the foreground is settled. Also check a session without `pi-subagents`, which should retain foreground-only busy/done behavior. Badge/toast observations are separate from automated wire tests.
+For a live check, use only this integration. Launch a fresh empty session without sending a prompt and confirm no indicator appears; run `/new` before the first prompt and confirm it remains silent. Send a first prompt and confirm busy/done behavior starts normally. Then observe a normal foreground turn, a turn lasting more than 15 seconds, and two background agents waiting for 45 seconds. With `pi-subagents` available, the foreground launch reply should not mark done while those agents remain running. Individual child sessions never write status; the foreground integration marks done once the manager is clear and the foreground is settled. Also check a session without `pi-subagents`, which should retain foreground-only busy/done behavior. Badge/toast observations are separate from automated wire tests.

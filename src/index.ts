@@ -12,6 +12,7 @@ export default function register(pi: ExtensionAPI): void {
   // Each runtime owns its own identity and timer. In-process SDK children may
   // import this same module, but cannot affect the foreground instance.
   let session: WarpSession | undefined;
+  let announced = false;
   let busy = false;
   let foregroundActive = false;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -117,7 +118,7 @@ export default function register(pi: ExtensionAPI): void {
     lastManagedWork = undefined;
     hadManagedWork = false;
     session = { id, cwd: ctx.cwd };
-    emit("session_start", session, "session_start");
+    announced = false;
   });
 
   pi.on("agent_start", (_event, ctx) => {
@@ -128,6 +129,12 @@ export default function register(pi: ExtensionAPI): void {
     stopWorkCheck();
     if (busy) return;
     const active = session!;
+    // Warp displays an announced session as busy, so announce only when
+    // actual work begins rather than while Pi is waiting for its first prompt.
+    if (!announced) {
+      emit("session_start", active, "agent_start");
+      announced = true;
+    }
     busy = true;
     lastManagedWork = undefined;
     hadManagedWork = false;
@@ -158,5 +165,6 @@ export default function register(pi: ExtensionAPI): void {
     lastManagedWork = undefined;
     hadManagedWork = false;
     session = undefined;
+    announced = false;
   });
 }

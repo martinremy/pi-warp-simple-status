@@ -57,7 +57,12 @@ describe("opt-in diagnostic trace", () => {
   it("writes real JSONL showing cancelled grace and one stop after a completion follow-up", async () => {
     const state = manager(true); const h = host(); const ctx = context();
     await h.fire("session_start", ctx);
+    expect(bytes()).toEqual([]);
+    expect(traceRecords().filter((r) => r.kind === "emit")).toEqual([]);
     await h.fire("agent_start", ctx, { prompt: "PRIVATE EVENT", input: "PRIVATE INPUT" });
+    expect(traceRecords().filter((r) => r.kind === "emit").map((r) => [r.event, r.reason])).toEqual([
+      ["session_start", "agent_start"], ["prompt_submit", "agent_start"],
+    ]);
     await h.fire("agent_settled", ctx);
     await vi.advanceTimersByTimeAsync(15000);
     state.running = false;
