@@ -56,6 +56,39 @@ A busy heartbeat repeats every 15 seconds while waiting for either the foregroun
 - macOS/Linux write OSC 777 to `/dev/tty`. Windows uses TTY stdout as a best-effort fallback.
 - **Warp controls badge appearance and OS toasts**, including focus behavior, notification permissions, and Do Not Disturb. Sending `stop` does not guarantee a visible toast. The wire mapping is covered by automated tests; live busy/done rendering and toast behavior still require confirmation in Warp.
 
+## Diagnostic tracing
+
+To investigate duplicate toasts, exit Pi and start it with an opt-in JSONL path:
+
+```sh
+PI_WARP_SIMPLE_STATUS_TRACE=/tmp/pi-warp-simple-status-trace.jsonl pi --resume
+```
+
+The parent directory must exist. Tracing is off by default and does not change
+notification rules. It appends metadata only: timestamp, PID, extension-instance
+ID, event session ID, owned foreground session ID, mode, busy/foreground state,
+and timer state. No conversation content is logged.
+
+- `kind: "lifecycle"` observes `session_start`, `agent_start`, `agent_settled`,
+  or `session_shutdown`. Child events can appear here without sending status.
+- `kind: "manager"` records transitions in `managedWorkBlocking`, the safe
+  adapter's result. `true` includes throwing/invalid status checks treated
+  conservatively as busy; `false` includes an absent optional manager.
+- `kind: "emit"` records an attempted OSC 777 event. For `stop`, `reason` is
+  either `manager_poll` (managed work cleared) or `agent_settled` (foreground
+  settled with no blocking work). Busy events distinguish `agent_start` from
+  `heartbeat`.
+
+Two `emit/stop` records mean this extension attempted two completion events.
+One such record does not rule out another notification source, such as Pi's
+built-in terminal status reporting. An emission record does not prove transport
+success or a displayed toast.
+
+File-write/inspection failures are swallowed. New files use mode `0600` on
+platforms that honor it; existing permissions are not tightened. Synchronous
+logging can affect timing, so use a normal local file and unset the variable
+when the capture is complete. The old `RPIV_WARP_TRACE` variable is not used.
+
 ## Development
 
 The Pi entry point is [`src/index.ts`](src/index.ts); the stateless Warp transport lives in [`src/warp.ts`](src/warp.ts), and the optional manager adapter in [`src/subagents.ts`](src/subagents.ts). Pi loads TypeScript directly via jiti—no runtime build step or third-party runtime dependency.

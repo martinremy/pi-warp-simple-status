@@ -1,13 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { supportsWarp, writeStatus, type WarpSession } from "./warp.js";
+import { supportsWarp, writeStatus, type StatusEvent, type WarpSession } from "./warp.js";
 import { hasManagedWork } from "./subagents.js";
+import { createTrace } from "./trace.js";
 
 const HEARTBEAT_MS = 15_000;
 const WORK_CHECK_MS = 250;
 
 export default function register(pi: ExtensionAPI): void {
-  if (!supportsWarp()) return;
-
   // Each runtime owns its own identity and timer. In-process SDK children may
   // import this same module, but cannot affect the foreground instance.
   let session: WarpSession | undefined;
@@ -15,6 +14,27 @@ export default function register(pi: ExtensionAPI): void {
   let foregroundActive = false;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let workCheck: ReturnType<typeof setInterval> | undefined;
+  let lastManagedWork: boolean | undefined;
+
+  const trace = createTrace(() => ({
+    ownerSessionId: session?.id ?? null,
+    busy,
+    foregroundActive,
+    heartbeatActive: heartbeat !== undefined,
+    workCheckActive: workCheck !== undefined,
+  }));
+  const warpSupported = supportsWarp();
+  trace("registration", "detect_warp", () => ({ warpSupported }));
+  if (!warpSupported) return;
+
+  function traceLifecycle(event: string, ctx: ExtensionContext): void {
+    trace("lifecycle", event, () => ({ sessionId: ctx.sessionManager.getSessionId(), mode: ctx.mode }));
+  }
+
+  function emit(event: StatusEvent, active: WarpSession, reason: string): void {
+    trace("emit", event, () => ({ sessionId: active.id, reason }));
+    writeStatus(event, active);
+  }
 
   function stopHeartbeat(): void {
     if (heartbeat !== undefined) clearInterval(heartbeat);
@@ -26,11 +46,16 @@ export default function register(pi: ExtensionAPI): void {
     workCheck = undefined;
   }
 
-  function finishWhenIdle(active: WarpSession): void {
+  function finishWhenIdle(active: WarpSession, reason: "agent_settled" | "manager_poll"): void {
     if (!busy || foregroundActive || session !== active) return;
-    if (hasManagedWork()) {
+    const managedWorkBlocking = hasManagedWork();
+    if (lastManagedWork !== managedWorkBlocking) {
+      lastManagedWork = managedWorkBlocking;
+      trace("manager", "work_status", () => ({ sessionId: active.id, managedWorkBlocking }));
+    }
+    if (managedWorkBlocking) {
       if (workCheck === undefined) {
-        workCheck = setInterval(() => finishWhenIdle(active), WORK_CHECK_MS);
+        workCheck = setInterval(() => finishWhenIdle(active, "manager_poll"), WORK_CHECK_MS);
         workCheck.unref();
       }
       return;
@@ -38,7 +63,7 @@ export default function register(pi: ExtensionAPI): void {
     busy = false;
     stopHeartbeat();
     stopWorkCheck();
-    writeStatus("stop", active);
+    emit("stop", active, reason);
   }
 
   function owns(ctx: ExtensionContext): boolean {
@@ -47,6 +72,7 @@ export default function register(pi: ExtensionAPI): void {
   }
 
   pi.on("session_start", (_event, ctx) => {
+    traceLifecycle("session_start", ctx);
     if (ctx.mode !== "tui") return;
     const id = ctx.sessionManager.getSessionId();
     if (session?.id === id && session.cwd === ctx.cwd) return;
@@ -54,20 +80,23 @@ export default function register(pi: ExtensionAPI): void {
     stopWorkCheck();
     busy = false;
     foregroundActive = false;
+    lastManagedWork = undefined;
     session = { id, cwd: ctx.cwd };
-    writeStatus("session_start", session);
+    emit("session_start", session, "session_start");
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    traceLifecycle("agent_start", ctx);
     if (!owns(ctx)) return;
     foregroundActive = true;
     stopWorkCheck();
     if (busy) return;
     const active = session!;
     busy = true;
-    writeStatus("prompt_submit", active);
+    lastManagedWork = undefined;
+    emit("prompt_submit", active, "agent_start");
     heartbeat = setInterval(() => {
-      if (busy && session === active) writeStatus("prompt_submit", active);
+      if (busy && session === active) emit("prompt_submit", active, "heartbeat");
     }, HEARTBEAT_MS);
     heartbeat.unref();
   });
@@ -75,17 +104,20 @@ export default function register(pi: ExtensionAPI): void {
   // agent_end can be followed by retry, compaction, or queued continuation.
   // Settlement ends the foreground run, but managed background work can remain.
   pi.on("agent_settled", (_event, ctx) => {
+    traceLifecycle("agent_settled", ctx);
     if (!owns(ctx) || !busy) return;
     foregroundActive = false;
-    finishWhenIdle(session!);
+    finishWhenIdle(session!, "agent_settled");
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    traceLifecycle("session_shutdown", ctx);
     if (!owns(ctx)) return;
     busy = false;
     foregroundActive = false;
     stopHeartbeat();
     stopWorkCheck();
+    lastManagedWork = undefined;
     session = undefined;
   });
 }

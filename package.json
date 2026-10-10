@@ -1,6 +1,6 @@
 {
   "name": "pi-warp-simple-status",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Warp busy and done status for Pi, with optional subagent-aware completion",
   "keywords": ["pi", "pi-coding-agent", "pi-package", "warp"],
   "homepage": "https://github.com/martinremy/pi-warp-simple-status#readme",
