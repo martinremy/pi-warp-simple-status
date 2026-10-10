@@ -78,10 +78,12 @@ describe("Warp transport", () => {
   it("writes to Windows TTY stdout only", () => {
     setPlatform("win32");
     setTTY(true);
-    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const streamWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     writeStatus("stop", session);
-    expect(write).toHaveBeenCalledWith(expect.stringContaining("\"event\":\"stop\""));
+    expect(fs.writeSync).toHaveBeenCalledWith(process.stdout.fd, expect.stringContaining("\"event\":\"stop\""));
+    expect(streamWrite).not.toHaveBeenCalled();
     expect(fs.openSync).not.toHaveBeenCalled();
+    expect(fs.closeSync).not.toHaveBeenCalled();
   });
   it("does not write to redirected Windows stdout", () => {
     setPlatform("win32");
@@ -89,5 +91,16 @@ describe("Warp transport", () => {
     const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     writeStatus("stop", session);
     expect(write).not.toHaveBeenCalled();
+    expect(fs.writeSync).not.toHaveBeenCalled();
+  });
+  it("contains Windows write errors without using the asynchronous stream", () => {
+    setPlatform("win32");
+    setTTY(true);
+    const streamWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    vi.mocked(fs.writeSync).mockImplementation(() => { throw new Error("broken stdout"); });
+    expect(() => writeStatus("stop", session)).not.toThrow();
+    expect(fs.writeSync).toHaveBeenCalledWith(process.stdout.fd, expect.any(String));
+    expect(streamWrite).not.toHaveBeenCalled();
+    expect(fs.closeSync).not.toHaveBeenCalled();
   });
 });

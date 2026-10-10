@@ -30,7 +30,8 @@ export function writeStatus(event: StatusEvent, session: WarpSession): void {
   const bytes = `\x1b]777;notify;warp://cli-agent;${JSON.stringify(payload)}\x07`;
   if (process.platform === "win32") {
     try {
-      if (process.stdout.isTTY) process.stdout.write(bytes);
+      // Avoid asynchronous stream errors escaping this best-effort boundary.
+      if (process.stdout.isTTY) writeSync(process.stdout.fd, bytes);
     } catch {
       // A notification must never interrupt Pi.
     }
