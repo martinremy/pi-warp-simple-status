@@ -54,6 +54,17 @@ describe("Warp transport", () => {
     expect(fs.writeSync).toHaveBeenCalledWith(42, `\x1b]777;notify;warp://cli-agent;${JSON.stringify(body)}\x07`);
     expect(fs.closeSync).toHaveBeenCalledWith(42);
   });
+  it("includes the supplied summary only in stop, escaping terminal controls", () => {
+    const response = "Created the branch with escaped \x07\x1b characters";
+    writeStatus("stop", session, response);
+    const bytes = String(vi.mocked(fs.writeSync).mock.calls[0][1]);
+    expect(JSON.parse(bytes.slice("\x1b]777;notify;warp://cli-agent;".length, -1)).response).toBe(response);
+    expect(bytes.slice(2, -1)).not.toContain("\x07");
+    expect(bytes.slice(2, -1)).not.toContain("\x1b");
+    writeStatus("prompt_submit", session, response);
+    const busyBytes = String(vi.mocked(fs.writeSync).mock.calls[1][1]);
+    expect(JSON.parse(busyBytes.slice("\x1b]777;notify;warp://cli-agent;".length, -1))).not.toHaveProperty("response");
+  });
   it("escapes control characters in metadata", () => {
     writeStatus("stop", { id: "id\x07\x1b", cwd: "/home/me/\nproject" });
     const bytes = String(vi.mocked(fs.writeSync).mock.calls[0][1]);

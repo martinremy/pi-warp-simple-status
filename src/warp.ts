@@ -14,8 +14,8 @@ export function supportsWarp(): boolean {
     && Number.isSafeInteger(version) && version >= 1;
 }
 
-/** Best-effort terminal transport. Never send conversation content to Warp. */
-export function writeStatus(event: StatusEvent, session: WarpSession): void {
+/** Best-effort terminal transport. Only an opt-in summary may carry derived turn content. */
+export function writeStatus(event: StatusEvent, session: WarpSession, response = "Pi finished responding."): void {
   if (!supportsWarp()) return;
   const payload = {
     v: 1,
@@ -25,7 +25,7 @@ export function writeStatus(event: StatusEvent, session: WarpSession): void {
     cwd: session.cwd,
     project: basename(session.cwd),
     ...(event === "prompt_submit" ? { query: "" } : {}),
-    ...(event === "stop" ? { query: "", response: "Pi finished responding." } : {}),
+    ...(event === "stop" ? { query: "", response } : {}),
   };
   const bytes = `\x1b]777;notify;warp://cli-agent;${JSON.stringify(payload)}\x07`;
   if (process.platform === "win32") {

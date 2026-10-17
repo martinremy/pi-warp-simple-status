@@ -8,6 +8,7 @@ vi.mock("node:fs", async () => ({
   ...await vi.importActual<typeof import("node:fs")>("node:fs"),
   openSync: vi.fn(), writeSync: vi.fn(), closeSync: vi.fn(),
 }));
+vi.mock("../src/summary.js", () => ({ loadSummaryConfig: () => undefined }));
 import register from "../src/index.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");
