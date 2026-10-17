@@ -23,7 +23,7 @@ interface TraceDetails {
 export function createTrace(state: () => TraceState) {
   let instanceId: string | undefined;
   return (
-    kind: "registration" | "lifecycle" | "manager" | "completion" | "emit",
+    kind: "registration" | "lifecycle" | "manager" | "completion" | "emit" | "summary",
     event: string,
     details: () => TraceDetails = () => ({}),
   ): void => {

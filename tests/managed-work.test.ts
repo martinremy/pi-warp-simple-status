@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", () => ({ openSync: vi.fn(), writeSync: vi.fn(), closeSync: vi.fn() }));
+vi.mock("../src/summary.js", () => ({ loadSummaryConfig: () => undefined }));
 import register from "../src/index.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");

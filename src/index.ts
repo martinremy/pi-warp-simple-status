@@ -2,11 +2,17 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { supportsWarp, writeStatus, type StatusEvent, type WarpSession } from "./warp.js";
 import { hasManagedWork } from "./subagents.js";
 import { createTrace } from "./trace.js";
+import { loadSummaryConfig, summarizeTurn } from "./summary.js";
 
 const HEARTBEAT_MS = 15_000;
 const WORK_CHECK_MS = 250;
 const COMPLETION_GRACE_MS = 500;
 type CompletionReason = "agent_settled" | "manager_poll" | "completion_grace";
+interface SummaryAttempt {
+  controller: AbortController;
+  gateReady: boolean;
+  result?: { response: string | undefined };
+}
 
 export default function register(pi: ExtensionAPI): void {
   // Each runtime owns its own identity and timer. In-process SDK children may
@@ -20,6 +26,8 @@ export default function register(pi: ExtensionAPI): void {
   let lastManagedWork: boolean | undefined;
   let hadManagedWork = false;
   let completionTimer: ReturnType<typeof setTimeout> | undefined;
+  let settledContext: ExtensionContext | undefined;
+  let summaryAttempt: SummaryAttempt | undefined;
 
   const trace = createTrace(() => ({
     ownerSessionId: session?.id ?? null,
@@ -33,14 +41,21 @@ export default function register(pi: ExtensionAPI): void {
   const warpSupported = supportsWarp();
   trace("registration", "detect_warp", () => ({ warpSupported }));
   if (!warpSupported) return;
+  const summaryConfig = loadSummaryConfig();
 
   function traceLifecycle(event: string, ctx: ExtensionContext): void {
     trace("lifecycle", event, () => ({ sessionId: ctx.sessionManager.getSessionId(), mode: ctx.mode }));
   }
 
-  function emit(event: StatusEvent, active: WarpSession, reason: string): void {
+  function emit(event: StatusEvent, active: WarpSession, reason: string, response?: string): void {
     trace("emit", event, () => ({ sessionId: active.id, reason }));
-    writeStatus(event, active);
+    writeStatus(event, active, response);
+  }
+
+  function cancelSummary(): void {
+    const pending = summaryAttempt;
+    summaryAttempt = undefined;
+    pending?.controller.abort();
   }
 
   function stopHeartbeat(): void {
@@ -75,13 +90,14 @@ export default function register(pi: ExtensionAPI): void {
     }
     if (managedWorkBlocking) {
       hadManagedWork = true;
+      if (summaryAttempt) summaryAttempt.gateReady = false;
       cancelCompletion("managed_work");
       startWorkCheck(active);
       return;
     }
     // Only a busy period that actually waited for managed work needs grace.
     // Keep polling/heartbeating, but do not reset an existing completion timer.
-    if (hadManagedWork && reason !== "completion_grace") {
+    if (hadManagedWork && reason !== "completion_grace" && !summaryAttempt?.gateReady) {
       if (completionTimer === undefined) {
         completionTimer = setTimeout(() => {
           completionTimer = undefined;
@@ -94,10 +110,32 @@ export default function register(pi: ExtensionAPI): void {
       startWorkCheck(active);
       return;
     }
+    // Start only after the original completion gate (including managed-work
+    // grace) passes. Do not block Pi's event handler while the request runs.
+    if (summaryConfig && settledContext) {
+      if (!summaryAttempt) {
+        const attempt: SummaryAttempt = { controller: new AbortController(), gateReady: true };
+        summaryAttempt = attempt;
+        // Keep the existing checks alive: resumed managed work must still earn
+        // its normal grace, even if it drains before generation finishes.
+        startWorkCheck(active);
+        void summarizeTurn(settledContext, summaryConfig, attempt.controller.signal,
+          outcome => trace("summary", outcome, () => ({ sessionId: active.id }))).then(response => {
+          if (summaryAttempt !== attempt || session !== active) return;
+          attempt.result = { response };
+          finishWhenIdle(active, "manager_poll");
+        });
+        return;
+      }
+      summaryAttempt.gateReady = true;
+      if (!summaryAttempt.result) return;
+    }
+    const response = summaryAttempt?.result?.response;
+    summaryAttempt = undefined;
     busy = false;
     stopHeartbeat();
     stopWorkCheck();
-    emit("stop", active, reason);
+    emit("stop", active, reason, response);
   }
 
   function owns(ctx: ExtensionContext): boolean {
@@ -113,6 +151,8 @@ export default function register(pi: ExtensionAPI): void {
     stopHeartbeat();
     stopWorkCheck();
     cancelCompletion("session_start");
+    cancelSummary();
+    settledContext = undefined;
     busy = false;
     foregroundActive = false;
     lastManagedWork = undefined;
@@ -125,6 +165,8 @@ export default function register(pi: ExtensionAPI): void {
     traceLifecycle("agent_start", ctx);
     if (!owns(ctx)) return;
     foregroundActive = true;
+    cancelSummary();
+    settledContext = undefined;
     cancelCompletion("agent_start");
     stopWorkCheck();
     if (busy) return;
@@ -151,6 +193,7 @@ export default function register(pi: ExtensionAPI): void {
     traceLifecycle("agent_settled", ctx);
     if (!owns(ctx) || !busy) return;
     foregroundActive = false;
+    settledContext = ctx;
     finishWhenIdle(session!, "agent_settled");
   });
 
@@ -162,6 +205,8 @@ export default function register(pi: ExtensionAPI): void {
     stopHeartbeat();
     stopWorkCheck();
     cancelCompletion("session_shutdown");
+    cancelSummary();
+    settledContext = undefined;
     lastManagedWork = undefined;
     hadManagedWork = false;
     session = undefined;
