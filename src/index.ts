@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { supportsWarp, writeStatus, type StatusEvent, type WarpSession } from "./warp.js";
 import { hasManagedWork } from "./subagents.js";
+import { createNicoAdapter } from "./nicobailon.js";
 import { createTrace } from "./trace.js";
 import { loadSummaryConfig, summarizeTurn } from "./summary.js";
 
@@ -26,6 +27,7 @@ export default function register(pi: ExtensionAPI): void {
   let lastManagedWork: boolean | undefined;
   let hadManagedWork = false;
   let completionTimer: ReturnType<typeof setTimeout> | undefined;
+  let completionGraceReady = false;
   let settledContext: ExtensionContext | undefined;
   let summaryAttempt: SummaryAttempt | undefined;
 
@@ -42,6 +44,8 @@ export default function register(pi: ExtensionAPI): void {
   trace("registration", "detect_warp", () => ({ warpSupported }));
   if (!warpSupported) return;
   const summaryConfig = loadSummaryConfig();
+  const nico = createNicoAdapter(pi);
+  let foregroundGeneration = 0;
 
   function traceLifecycle(event: string, ctx: ExtensionContext): void {
     trace("lifecycle", event, () => ({ sessionId: ctx.sessionManager.getSessionId(), mode: ctx.mode }));
@@ -81,15 +85,21 @@ export default function register(pi: ExtensionAPI): void {
     workCheck.unref();
   }
 
-  function finishWhenIdle(active: WarpSession, reason: CompletionReason): void {
+  async function finishWhenIdle(active: WarpSession, reason: CompletionReason): Promise<void> {
     if (!busy || foregroundActive || session !== active) return;
-    const managedWorkBlocking = hasManagedWork();
+    const generation = foregroundGeneration;
+    const nicoWork = nico.hasWork(active.id);
+    const nicoBlocking = typeof nicoWork === "boolean" ? nicoWork : await nicoWork;
+    // An RPC reply may belong to a run/session that was replaced while awaiting it.
+    if (!busy || foregroundActive || session !== active || generation !== foregroundGeneration) return;
+    const managedWorkBlocking = hasManagedWork() || nicoBlocking;
     if (lastManagedWork !== managedWorkBlocking) {
       lastManagedWork = managedWorkBlocking;
       trace("manager", "work_status", () => ({ sessionId: active.id, managedWorkBlocking }));
     }
     if (managedWorkBlocking) {
       hadManagedWork = true;
+      completionGraceReady = false;
       if (summaryAttempt) summaryAttempt.gateReady = false;
       cancelCompletion("managed_work");
       startWorkCheck(active);
@@ -97,10 +107,11 @@ export default function register(pi: ExtensionAPI): void {
     }
     // Only a busy period that actually waited for managed work needs grace.
     // Keep polling/heartbeating, but do not reset an existing completion timer.
-    if (hadManagedWork && reason !== "completion_grace" && !summaryAttempt?.gateReady) {
+    if (hadManagedWork && !completionGraceReady && !summaryAttempt?.gateReady) {
       if (completionTimer === undefined) {
         completionTimer = setTimeout(() => {
           completionTimer = undefined;
+          completionGraceReady = true;
           trace("completion", "elapsed", () => ({ sessionId: active.id }));
           finishWhenIdle(active, "completion_grace");
         }, COMPLETION_GRACE_MS);
@@ -133,6 +144,7 @@ export default function register(pi: ExtensionAPI): void {
     const response = summaryAttempt?.result?.response;
     summaryAttempt = undefined;
     busy = false;
+    cancelCompletion("completed");
     stopHeartbeat();
     stopWorkCheck();
     emit("stop", active, reason, response);
@@ -151,6 +163,7 @@ export default function register(pi: ExtensionAPI): void {
     stopHeartbeat();
     stopWorkCheck();
     cancelCompletion("session_start");
+    completionGraceReady = false;
     cancelSummary();
     settledContext = undefined;
     busy = false;
@@ -158,6 +171,8 @@ export default function register(pi: ExtensionAPI): void {
     lastManagedWork = undefined;
     hadManagedWork = false;
     session = { id, cwd: ctx.cwd };
+    foregroundGeneration++;
+    nico.start(id);
     announced = false;
   });
 
@@ -165,9 +180,12 @@ export default function register(pi: ExtensionAPI): void {
     traceLifecycle("agent_start", ctx);
     if (!owns(ctx)) return;
     foregroundActive = true;
+    foregroundGeneration++;
+    nico.foregroundStarted();
     cancelSummary();
     settledContext = undefined;
     cancelCompletion("agent_start");
+    completionGraceReady = false;
     stopWorkCheck();
     if (busy) return;
     const active = session!;
@@ -194,17 +212,20 @@ export default function register(pi: ExtensionAPI): void {
     if (!owns(ctx) || !busy) return;
     foregroundActive = false;
     settledContext = ctx;
-    finishWhenIdle(session!, "agent_settled");
+    return finishWhenIdle(session!, "agent_settled");
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     traceLifecycle("session_shutdown", ctx);
     if (!owns(ctx)) return;
+    foregroundGeneration++;
+    nico.stop();
     busy = false;
     foregroundActive = false;
     stopHeartbeat();
     stopWorkCheck();
     cancelCompletion("session_shutdown");
+    completionGraceReady = false;
     cancelSummary();
     settledContext = undefined;
     lastManagedWork = undefined;
